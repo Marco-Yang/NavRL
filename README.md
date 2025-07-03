@@ -72,7 +72,7 @@ If you have already downloaded Isaac Sim version 2023.1.0-hotfix.1, you can skip
 
 To download Isaac Sim version 2023.1.0-hotfix.1:
 
-a. First, follow the steps on [this link](https://docs.omniverse.nvidia.com/isaacsim/latest/installation/install_container.html) to complete the Docker Container Setup. 
+a. First, follow the steps on [this link](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/install_container.html) to complete the Docker Container Setup. 
 
 b. Then, download the Isaac Sim to your docker container:
 ```
