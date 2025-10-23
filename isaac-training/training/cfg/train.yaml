@@ -13,6 +13,11 @@ max_frame_num: 12e8 # max frame
 eval_interval: 1000 # evaluate the policy for every N training steps
 save_interval: 1000
 
+# Checkpoint Optimization Settings
+compress_checkpoint: True  # Use LZ4 compression (50-70% disk savings)
+async_checkpoint_queue_size: 3  # Max pending async saves
+save_compression_level: 9  # LZ4 compression level (0-16, higher = better compression)
+
 # Training Environment
 env:
   num_envs: 2 # Number of drones for training
@@ -33,6 +38,6 @@ viewer:
 wandb:
   project: NavRL
   name: navigation_training
-  entity: CERLAB-UAV-RL-Navigation
+  entity: null
   mode: offline # online
   run_id: #kw9xf9k9

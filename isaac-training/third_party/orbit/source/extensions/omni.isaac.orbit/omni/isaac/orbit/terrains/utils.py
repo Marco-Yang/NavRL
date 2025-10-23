@@ -10,6 +10,7 @@ import torch
 import trimesh
 
 import warp as wp
+import matplotlib.pyplot as plt
 
 from omni.isaac.orbit.utils.warp import raycast_mesh
 
@@ -49,6 +50,16 @@ def color_meshes_by_height(meshes: list[trimesh.Trimesh], **kwargs) -> trimesh.T
         heights_normalized = np.clip(heights_normalized, 0.1, 0.9)
         # Get the color for each vertex based on the height
         color_map = kwargs.pop("color_map", "turbo")
+        
+        # Handle matplotlib color maps for trimesh
+        if color_map not in ['magma', 'inferno', 'plasma', 'viridis']:
+            try:
+                # Use matplotlib colormap if available
+                color_map = plt.get_cmap(color_map)
+            except:
+                # Fallback to a supported trimesh colormap
+                color_map = "viridis"
+        
         colors = trimesh.visual.color.interpolate(heights_normalized, color_map=color_map)
         # Set the vertex colors
         mesh.visual.vertex_colors = colors

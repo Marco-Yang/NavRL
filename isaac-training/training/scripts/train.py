@@ -13,6 +13,8 @@ from omni_drones.utils.torchrl import SyncDataCollector, EpisodeStats
 from torchrl.envs.transforms import TransformedEnv, Compose
 from utils import evaluate
 from torchrl.envs.utils import ExplorationType
+from async_checkpoint import AsyncCheckpointSaver
+from checkpoint_utils import PerformanceMonitor, format_checkpoint_name, print_model_info
 
 
 
@@ -58,10 +60,23 @@ def main(cfg):
     transformed_env.set_seed(cfg.seed)    
     # PPO Policy
     policy = PPO(cfg.algo, transformed_env.observation_spec, transformed_env.action_spec, cfg.device)
+    
+    # Print model information
+    print_model_info(policy.actor, "Actor Network")
+    print_model_info(policy.critic, "Critic Network")
 
     # checkpoint = "/home/zhefan/catkin_ws/src/navigation_runner/scripts/ckpts/checkpoint_2500.pt"
     # checkpoint = "/home/xinmingh/RLDrones/navigation/scripts/nav-ros/navigation_runner/ckpts/checkpoint_36000.pt"
     # policy.load_state_dict(torch.load(checkpoint))
+    
+    # Initialize async checkpoint saver
+    checkpoint_saver = AsyncCheckpointSaver(
+        max_queue_size=cfg.get('async_checkpoint_queue_size', 3),
+        verbose=True
+    )
+    
+    # Initialize performance monitor
+    perf_monitor = PerformanceMonitor()
     
     # Episode Stats Collector
     episode_stats_keys = [
@@ -88,8 +103,9 @@ def main(cfg):
         # Log Info
         info = {"env_frames": collector._frames, "rollout_fps": collector._fps}
 
-        # Train Policy
-        train_loss_stats = policy.train(data)
+        # Train Policy with performance monitoring
+        with perf_monitor.timer('policy_training'):
+            train_loss_stats = policy.train(data)
         info.update(train_loss_stats) # log training loss info
 
         # Calculate and log training episode stats
@@ -106,31 +122,84 @@ def main(cfg):
             print("[NavRL]: start evaluating policy at training step: ", i)
             env.enable_render(True)
             env.eval()
-            eval_info = evaluate(
-                env=transformed_env, 
-                policy=policy,
-                seed=cfg.seed, 
-                cfg=cfg,
-                exploration_type=ExplorationType.MEAN
-            )
+            with perf_monitor.timer('evaluation'):
+                eval_info = evaluate(
+                    env=transformed_env, 
+                    policy=policy,
+                    seed=cfg.seed, 
+                    cfg=cfg,
+                    exploration_type=ExplorationType.MEAN
+                )
             env.enable_render(not cfg.headless)
             env.train()
             env.reset()
             info.update(eval_info)
             print("\n[NavRL]: evaluation done.")
         
+        # Log performance metrics
+        perf_stats = perf_monitor.get_stats(window=10)
+        if perf_stats:
+            perf_info = {
+                f"perf/{name}": values['mean']
+                for name, values in perf_stats.items()
+            }
+            info.update(perf_info)
+        
         # Update wand info
         run.log(info)
 
+        # Print performance summary every 100 iterations
+        if i > 0 and i % 100 == 0:
+            print(perf_monitor.get_summary(window=100))
+            
+            # Log checkpoint saver stats
+            ckpt_stats = checkpoint_saver.get_stats()
+            print(f"\n[Checkpoint Stats]")
+            print(f"  Total saved: {ckpt_stats['save_count']}")
+            print(f"  Compression ratio: {ckpt_stats['compression_ratio']:.2f}x")
+            print(f"  Queue size: {ckpt_stats['queue_size']}\n")
 
-        # Save Model
+        # Save Model (async + compression)
         if i % cfg.save_interval == 0:
             ckpt_path = os.path.join(run.dir, f"checkpoint_{i}.pt")
-            torch.save(policy.state_dict(), ckpt_path)
-            print("[NavRL]: model saved at training step: ", i)
+            
+            # Prepare checkpoint dict
+            checkpoint = {
+                'model_state_dict': policy.state_dict(),
+                'iteration': i,
+                'env_frames': collector._frames,
+            }
+            
+            # Async save with compression
+            checkpoint_saver.save_async(
+                checkpoint,
+                path=ckpt_path,
+                compress=cfg.get('compress_checkpoint', True),
+                metadata={'iteration': i, 'frames': collector._frames}
+            )
+            print(f"[NavRL]: checkpoint queued for async save at step {i}")
 
+    # Save final checkpoint
+    print("\n[NavRL]: Training complete! Saving final checkpoint...")
     ckpt_path = os.path.join(run.dir, "checkpoint_final.pt")
-    torch.save(policy.state_dict(), ckpt_path)
+    checkpoint = {
+        'model_state_dict': policy.state_dict(),
+        'iteration': i,
+        'env_frames': collector._frames,
+    }
+    checkpoint_saver.save_async(
+        checkpoint,
+        path=ckpt_path,
+        compress=cfg.get('compress_checkpoint', True),
+        metadata={'final': True}
+    )
+    
+    # Shutdown checkpoint saver (wait for all saves to complete)
+    checkpoint_saver.shutdown(timeout=60)
+    
+    # Print final performance summary
+    print(perf_monitor.get_summary(window=1000))
+    
     wandb.finish()
     sim_app.close()
 
